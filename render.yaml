@@ -1,0 +1,54 @@
+# Render Blueprint -- deploys both services from this monorepo in one go.
+# Usage: Render Dashboard -> New -> Blueprint -> connect this repo.
+#
+# IMPORTANT: two envVars below (NEXT_PUBLIC_API_BASE_URL on the frontend,
+# CORS_ALLOWED_ORIGINS on the backend) are intentionally left as
+# `sync: false` placeholders. Render does not yet have a verified,
+# stable Blueprint syntax for "give me service A's full public https URL
+# as a string to bake into service B's build" the way Railway's
+# `${{service.RAILWAY_PUBLIC_DOMAIN}}` reference works -- so rather than
+# guess at unconfirmed syntax, fill these in manually from the Render
+# Dashboard AFTER the first deploy, once both services have real
+# *.onrender.com URLs assigned (see SUPABASE_RENDER_DEPLOYMENT.md step 5).
+# Every other value here is safe to deploy as-is.
+
+services:
+  - type: web
+    name: options-platform-backend
+    runtime: docker
+    rootDir: backend
+    plan: free
+    region: singapore
+    envVars:
+      - key: FYERS_APP_ID
+        sync: false
+      - key: FYERS_SECRET_ID
+        sync: false
+      - key: FYERS_REDIRECT_URI
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false  # paste your Supabase Session Pooler connection string here -- see deployment guide
+      - key: DEFAULT_TRADING_MODE
+        value: ADVISORY
+      - key: MARKET_HOURS_ONLY
+        value: "true"
+      - key: CYCLE_INTERVAL_SECONDS
+        value: "60"
+      - key: SCHEDULER_DEFAULT_UNDERLYINGS
+        value: '["NIFTY50","NIFTYBANK","FINNIFTY","SENSEX"]'
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false  # fill in after frontend's onrender.com URL is known, e.g. ["https://options-platform-frontend.onrender.com"]
+
+  - type: web
+    name: options-platform-frontend
+    runtime: docker
+    rootDir: frontend
+    plan: free
+    region: singapore
+    envVars:
+      - key: NEXT_PUBLIC_API_BASE_URL
+        sync: false  # fill in after backend's onrender.com URL is known, e.g. https://options-platform-backend.onrender.com
