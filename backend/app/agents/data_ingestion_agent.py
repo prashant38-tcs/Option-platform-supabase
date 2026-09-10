@@ -93,7 +93,7 @@ class DataIngestionAgent:
             t = time_to_expiry_years(now, expiry)
             if t <= 0 or leg.ltp <= 0:
                 continue
-            bs_result = compute_full_greeks(leg.ltp, spot_leg.ltp, leg.strike_price, now, expiry, self._risk_free_rate, is_call)
+            bs_result = compute_full_greeks(leg.ltp, spot_ltp, leg.strike_price, now, expiry, self._risk_free_rate, is_call)
             greeks = to_computed_greeks(bs_result, self._risk_free_rate, t)
             item = OptionChainItem(underlying=underlying, expiry=expiry, strike=leg.strike_price,
                                      option_type=OptionType.CE if is_call else OptionType.PE,
