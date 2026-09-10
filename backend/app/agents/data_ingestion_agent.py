@@ -42,28 +42,26 @@ class DataIngestionAgent:
         symbol = self._index_symbol(underlying)
         raw: FyersOptionChainResponse = await self._fyers.get_option_chain(symbol=symbol, strike_count=strike_count, timestamp=expiry_timestamp)
 
+        logger.warning("RAW optionsChain length for %s: %d. Full raw expiryData: %s", symbol, len(raw.optionsChain), raw.expiryData)
+        if raw.optionsChain:
+            logger.warning("First 3 raw legs for %s: %s", symbol, [
+                {"strike_price": leg.strike_price, "option_type": leg.option_type, "ltp": leg.ltp}
+                for leg in raw.optionsChain[:3]
+            ])
+
         spot_leg = next((leg for leg in raw.optionsChain if leg.is_underlying_row()), None)
 
         spot_ltp: Optional[float] = None
         if spot_leg is not None:
             spot_ltp = spot_leg.ltp
         else:
-            try:
-                sample_legs = [
-                    {"strike_price": leg.strike_price, "option_type": leg.option_type, "ltp": leg.ltp}
-                    for leg in raw.optionsChain[:5]
-                ]
-            except Exception:
-                sample_legs = "could not serialize legs"
             logger.warning(
-                "No underlying spot row found in optionsChain for %s. "
-                "Total legs=%d, first 5 legs=%s. Falling back to /data/quotes for spot price.",
-                symbol, len(raw.optionsChain), sample_legs,
+                "No underlying spot row found in optionsChain for %s. Total legs=%d. "
+                "Falling back to /data/quotes for spot price.",
+                symbol, len(raw.optionsChain),
             )
-
             try:
                 quotes_data = await self._fyers.get_quotes([symbol])
-                logger.warning("Raw /data/quotes response for %s: %s", symbol, quotes_data)
                 entries = quotes_data.get("d", [])
                 if entries:
                     v = entries[0].get("v", {})
@@ -74,8 +72,7 @@ class DataIngestionAgent:
             if spot_ltp is None or spot_ltp <= 0:
                 raise DataIngestionError(
                     f"Fyers option chain response for {symbol} did not include an underlying spot row, "
-                    f"and the /data/quotes fallback also failed to yield a usable price. "
-                    f"Check Render logs for the raw response just logged above."
+                    f"and the /data/quotes fallback also failed to yield a usable price."
                 )
 
         expiry = self._resolve_expiry(raw, expiry_timestamp, now)
@@ -108,39 +105,35 @@ class DataIngestionAgent:
         return OptionChainSnapshot(underlying=underlying, expiry=expiry, spot=spot_quote, calls=calls, puts=puts, fetched_at=now)
 
     @staticmethod
-def _resolve_expiry(raw: FyersOptionChainResponse, expiry_timestamp: Optional[str], now: datetime) -> datetime:
-    logger.warning("Raw expiryData from Fyers: %s", raw.expiryData)
-
-    if expiry_timestamp:
-        try:
-            return datetime.fromtimestamp(int(expiry_timestamp))
-        except (ValueError, OverflowError):
-            pass
-
-    if raw.expiryData:
-        first = raw.expiryData[0]
-        logger.warning("First expiryData entry: %s (keys=%s)", first, list(first.keys()) if isinstance(first, dict) else "not a dict")
-
-        for key in ("expiry", "date", "exp", "expiryDate", "expTs"):
-            ts = first.get(key) if isinstance(first, dict) else None
-            if ts is None:
-                continue
+    def _resolve_expiry(raw: FyersOptionChainResponse, expiry_timestamp: Optional[str], now: datetime) -> datetime:
+        if expiry_timestamp:
             try:
-                return datetime.fromtimestamp(int(ts))
-            except (ValueError, TypeError, OverflowError):
+                return datetime.fromtimestamp(int(expiry_timestamp))
+            except (ValueError, OverflowError):
                 pass
-            if isinstance(ts, str):
-                for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d-%b-%Y", "%d%b%y"):
-                    try:
-                        return datetime.strptime(ts, fmt)
-                    except ValueError:
-                        continue
 
-    raise DataIngestionError(
-        "Could not resolve a concrete expiry datetime from the Fyers option chain response "
-        "-- refusing to guess, since an incorrect expiry corrupts every downstream Greeks calculation. "
-        "Check Render logs for the raw expiryData just logged above."
-    )
+        if raw.expiryData:
+            first = raw.expiryData[0]
+            for key in ("expiry", "date", "exp", "expiryDate", "expTs"):
+                ts = first.get(key) if isinstance(first, dict) else None
+                if ts is None:
+                    continue
+                try:
+                    return datetime.fromtimestamp(int(ts))
+                except (ValueError, TypeError, OverflowError):
+                    pass
+                if isinstance(ts, str):
+                    for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d-%b-%Y", "%d%b%y"):
+                        try:
+                            return datetime.strptime(ts, fmt)
+                        except ValueError:
+                            continue
+
+        raise DataIngestionError(
+            "Could not resolve a concrete expiry datetime from the Fyers option chain response "
+            "-- refusing to guess, since an incorrect expiry corrupts every downstream Greeks calculation. "
+            "Check Render logs for the raw expiryData just logged above."
+        )
 
     async def fetch_news_headlines(self, max_items_per_feed: int = 20) -> list:
         if self._news is None:
