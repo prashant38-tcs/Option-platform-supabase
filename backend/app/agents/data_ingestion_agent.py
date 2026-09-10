@@ -108,24 +108,39 @@ class DataIngestionAgent:
         return OptionChainSnapshot(underlying=underlying, expiry=expiry, spot=spot_quote, calls=calls, puts=puts, fetched_at=now)
 
     @staticmethod
-    def _resolve_expiry(raw: FyersOptionChainResponse, expiry_timestamp: Optional[str], now: datetime) -> datetime:
-        if expiry_timestamp:
+def _resolve_expiry(raw: FyersOptionChainResponse, expiry_timestamp: Optional[str], now: datetime) -> datetime:
+    logger.warning("Raw expiryData from Fyers: %s", raw.expiryData)
+
+    if expiry_timestamp:
+        try:
+            return datetime.fromtimestamp(int(expiry_timestamp))
+        except (ValueError, OverflowError):
+            pass
+
+    if raw.expiryData:
+        first = raw.expiryData[0]
+        logger.warning("First expiryData entry: %s (keys=%s)", first, list(first.keys()) if isinstance(first, dict) else "not a dict")
+
+        for key in ("expiry", "date", "exp", "expiryDate", "expTs"):
+            ts = first.get(key) if isinstance(first, dict) else None
+            if ts is None:
+                continue
             try:
-                return datetime.fromtimestamp(int(expiry_timestamp))
-            except (ValueError, OverflowError):
+                return datetime.fromtimestamp(int(ts))
+            except (ValueError, TypeError, OverflowError):
                 pass
-        if raw.expiryData:
-            first = raw.expiryData[0]
-            ts = first.get("expiry") or first.get("date")
-            if ts:
-                try:
-                    return datetime.fromtimestamp(int(ts))
-                except (ValueError, TypeError, OverflowError):
-                    pass
-        raise DataIngestionError(
-            "Could not resolve a concrete expiry datetime from the Fyers option chain response "
-            "-- refusing to guess, since an incorrect expiry corrupts every downstream Greeks calculation."
-        )
+            if isinstance(ts, str):
+                for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d-%b-%Y", "%d%b%y"):
+                    try:
+                        return datetime.strptime(ts, fmt)
+                    except ValueError:
+                        continue
+
+    raise DataIngestionError(
+        "Could not resolve a concrete expiry datetime from the Fyers option chain response "
+        "-- refusing to guess, since an incorrect expiry corrupts every downstream Greeks calculation. "
+        "Check Render logs for the raw expiryData just logged above."
+    )
 
     async def fetch_news_headlines(self, max_items_per_feed: int = 20) -> list:
         if self._news is None:
