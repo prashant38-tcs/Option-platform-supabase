@@ -105,8 +105,8 @@ class DataIngestionAgent:
         if not calls or not puts:
             raise DataIngestionError(f"Fyers option chain for {symbol} returned no usable priced legs")
 
-        prev_close = spot_leg.ltp
-        spot_quote = UnderlyingQuote(underlying=underlying, ltp=spot_leg.ltp, prev_close=prev_close, change=0.0,
+        prev_close = spot_ltp
+        spot_quote = UnderlyingQuote(underlying=underlying, ltp=spot_ltp, prev_close=prev_close, change=0.0,
                                        change_pct=0.0, timestamp=now, india_vix=raw.indiavixData.ltp if raw.indiavixData else None)
 
         return OptionChainSnapshot(underlying=underlying, expiry=expiry, spot=spot_quote, calls=calls, puts=puts, fetched_at=now)
