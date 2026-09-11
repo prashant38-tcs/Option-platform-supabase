@@ -28,8 +28,7 @@ logger = logging.getLogger("main")
 _UNDERLYING_BY_VALUE = {u.value: u for u in Underlying}
 
 
-def _resolve_underlyings(raw_values: list[str]) -> list[Underlying]:
-    resolved = []
+def _resolve_underlyings(raw_values: list[str]) -> listresolved = []
     for v in raw_values:
         if v not in _UNDERLYING_BY_VALUE:
             raise ValueError(f"Unknown underlying '{v}'. Valid values: {sorted(_UNDERLYING_BY_VALUE.keys())}")
@@ -92,6 +91,10 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     app.state.broadcaster = broadcaster
     app.state.underlyings = underlyings
+    # All underlyings share ONE PositionStore instance -- grab it once
+    # here so /api/positions can read it without needing to know which
+    # underlying's WorkflowAgents to look through.
+    app.state.position_store = next(iter(agents_by_underlying.values())).position_store
 
     logger.info("Starting scheduler for underlyings: %s | default trading mode: %s | market_hours_only: %s",
                 [u.value for u in underlyings], settings.default_trading_mode, settings.market_hours_only)
@@ -175,6 +178,37 @@ async def set_capital(body: CapitalUpdate):
     for agents in app.state.agents_by_underlying.values():
         agents.risk._config.manual_capital_override = body.capital  # noqa: SLF001
     return {"capital": body.capital}
+
+
+@app.get("/api/positions")
+async def get_open_positions():
+    """Lists every currently OPEN Paper/Live position. Positions now
+    close automatically at expiry (see risk_manager_agent.py's
+    close_expired_positions_for_underlying, invoked at the start of every
+    cycle) -- until a position's expiry date arrives, it stays open here
+    and correctly counts against the max-concurrent-positions cap."""
+    store = app.state.position_store
+    positions = []
+    for pos in store.all():
+        signal = pos.signal
+        positions.append({
+            "position_id": pos.position_id,
+            "underlying": pos.underlying.value,
+            "trading_mode": pos.trading_mode.value,
+            "strategy_type": signal.strategy_type.value,
+            "risk_category": signal.risk_category.value,
+            "opened_at": pos.opened_at.isoformat(),
+            "expiry": signal.legs[0].expiry.isoformat() if signal.legs else None,
+            "net_premium": signal.net_premium,
+            "max_loss_estimate": signal.max_loss_estimate,
+            "max_profit_estimate": signal.max_profit_estimate,
+            "legs": [
+                {"strike": leg.strike, "option_type": leg.option_type.value, "side": leg.side,
+                 "lots": leg.lots, "entry_price": leg.entry_price_hint}
+                for leg in signal.legs
+            ],
+        })
+    return {"count": len(positions), "positions": positions}
 
 
 @app.get("/api/fyers/session-status")
