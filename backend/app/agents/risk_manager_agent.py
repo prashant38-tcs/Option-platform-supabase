@@ -1,9 +1,11 @@
 from __future__ import annotations
 import logging
 from datetime import datetime, time as dtime
+from typing import Optional
 
 from app.integrations.fyers_client import FyersClient, FyersSessionExpiredError
 from app.core.market_calendar import now_ist_naive
+from app.core.position_store import PositionStore, compute_position_realized_pnl, is_position_expired
 from app.models.enums import TradingMode, FyersOrderSide, RiskCategory
 from app.models.risk_schemas import RiskAgentConfig, DailyRiskState, LiveComplianceChecklist
 from app.models.strategy_schemas import TradeSignal, RiskReview
@@ -168,7 +170,36 @@ class RiskManagerAgent:
         return False
 
 
-async def risk_manager_node(state: TradingWorkflowState, agent: RiskManagerAgent) -> TradingWorkflowState:
+def close_expired_positions_for_underlying(
+    risk_agent: RiskManagerAgent, position_store: PositionStore, underlying, now: datetime,
+    current_spot: Optional[float],
+) -> list"""Closes every OPEN position for `underlying` whose legs have reached
+    expiry, crediting the realized P&L (marked to intrinsic value at the
+    current spot) back into the shared RiskManagerAgent's daily state and
+    freeing the position slot. This did not exist anywhere in the
+    live/paper cycle path before -- only the backtest engine had
+    expiry-based closing logic -- which is why positions opened during
+    testing never closed and permanently filled the concurrent-position cap."""
+    messages: list[str] = []
+    if current_spot is None:
+        return messages
+
+    for position in position_store.for_underlying(underlying):
+        if not is_position_expired(position.signal, now):
+            continue
+        realized_pnl = compute_position_realized_pnl(position.signal, current_spot)
+        risk_agent.record_position_closed(
+            realized_pnl=realized_pnl, delta=position.signal.net_delta, vega=position.signal.net_vega,
+        )
+        position_store.remove(position.position_id)
+        messages.append(
+            f"Closed expired position {position.position_id} ({position.signal.strategy_type.value}) "
+            f"at spot {current_spot:.2f} -- realized P&L Rs.{realized_pnl:,.2f}"
+        )
+    return messages
+
+
+async def risk_manager_node(state: TradingWorkflowState, agent: RiskManagerAgent, position_store: Optional[PositionStore] = None) -> TradingWorkflowState:
     now = now_ist_naive()
     try:
         daily_state = await agent.refresh_daily_state(now)
@@ -179,6 +210,13 @@ async def risk_manager_node(state: TradingWorkflowState, agent: RiskManagerAgent
         return state
 
     state.daily_risk_state = daily_state
+
+    if position_store is not None:
+        current_spot = state.option_chain_snapshot.spot.ltp if state.option_chain_snapshot else None
+        close_messages = close_expired_positions_for_underlying(agent, position_store, state.underlying, now, current_spot)
+        for msg in close_messages:
+            state.log(AGENT_NAME, msg, level="decision")
+
     state.log(AGENT_NAME,
               f"Capital base refreshed: Rs.{daily_state.capital_base:,.2f} | "
               f"Target: Rs.{daily_state.daily_profit_target_amount:,.2f} | "
@@ -200,4 +238,4 @@ async def risk_manager_node(state: TradingWorkflowState, agent: RiskManagerAgent
         else:
             state.log(AGENT_NAME, f"REJECTED signal {signal.signal_id}: {'; '.join(review.rejection_reasons)}", level="decision")
 
-    return state
+    return 
