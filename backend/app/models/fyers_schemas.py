@@ -74,11 +74,16 @@ class FyersOptionChainLeg(BaseModel):
     def is_underlying_row(self) -> bool:
         return self.option_type == ""
 
-
-class FyersOptionChainResponse(FyersResponseEnvelope):
+class FyersOptionChainData(BaseModel):
     optionsChain: list[FyersOptionChainLeg] = Field(default_factory=list)
     indiavixData: Optional[FyersIndiaVixData] = None
     expiryData: list[dict] = Field(default_factory=list)
+    callOi: int = 0
+    putOi: int = 0
+
+
+class FyersOptionChainResponse(FyersResponseEnvelope):
+    data: FyersOptionChainData = Field(default_factory=FyersOptionChainData)
 
 
 class FyersPlaceOrderRequest(BaseModel):
