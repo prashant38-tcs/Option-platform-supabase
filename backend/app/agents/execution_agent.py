@@ -19,11 +19,13 @@ AGENT_NAME = "ExecutionAgent"
 
 class ExecutionAgent:
     def __init__(self, fyers_client: Optional[FyersClient], risk_agent: RiskManagerAgent,
-                 compliance_checklist: Optional[LiveComplianceChecklist] = None, algo_id_tag: Optional[str] = None):
-        self._fyers = fyers_client
-        self._risk_agent = risk_agent
-        self._compliance_checklist = compliance_checklist
-        self._algo_id_tag = algo_id_tag
+             compliance_checklist: Optional[LiveComplianceChecklist] = None, algo_id_tag: Optional[str] = None,
+             position_tracker=None):
+    self._fyers = fyers_client
+    self._risk_agent = risk_agent
+    self._compliance_checklist = compliance_checklist
+    self._algo_id_tag = algo_id_tag
+    self._position_tracker = position_tracker
 
     async def execute(self, signal: TradeSignal, trading_mode: TradingMode, now: datetime) -> ManagedOrder:
         if trading_mode == TradingMode.ADVISORY:
@@ -42,15 +44,17 @@ class ExecutionAgent:
                               quantity=sum(leg.total_quantity for leg in signal.legs),
                               limit_price=signal.legs[0].entry_price_hint if signal.legs else 0.0)
 
-    def _execute_paper(self, signal: TradeSignal, now: datetime) -> ManagedOrder:
-        self._risk_agent.record_position_opened(delta=signal.net_delta, vega=signal.net_vega)
-        return ManagedOrder(order_id=f"paper-{uuid.uuid4().hex[:10]}", signal_id=signal.signal_id,
-                              trading_mode=TradingMode.PAPER, status=OrderLifecycleStatus.SIMULATED_OPEN,
-                              created_at=now, updated_at=now, symbol=signal.legs[0].symbol if signal.legs else "",
-                              side=signal.legs[0].side if signal.legs else None, product_type=FyersProductType.MARGIN,
-                              quantity=sum(leg.total_quantity for leg in signal.legs),
-                              limit_price=signal.legs[0].entry_price_hint if signal.legs else 0.0,
-                              filled_price=signal.legs[0].entry_price_hint if signal.legs else 0.0)
+   def _execute_paper(self, signal: TradeSignal, now: datetime) -> ManagedOrder:
+    self._risk_agent.record_position_opened(delta=signal.net_delta, vega=signal.net_vega)
+    if self._position_tracker is not None:
+        self._position_tracker.add_position(signal.underlying.value, signal, TradingMode.PAPER, now)
+    return ManagedOrder(order_id=f"paper-{uuid.uuid4().hex[:10]}", signal_id=signal.signal_id,
+                          trading_mode=TradingMode.PAPER, status=OrderLifecycleStatus.SIMULATED_OPEN,
+                          created_at=now, updated_at=now, symbol=signal.legs[0].symbol if signal.legs else "",
+                          side=signal.legs[0].side if signal.legs else None, product_type=FyersProductType.MARGIN,
+                          quantity=sum(leg.total_quantity for leg in signal.legs),
+                          limit_price=signal.legs[0].entry_price_hint if signal.legs else 0.0,
+                          filled_price=signal.legs[0].entry_price_hint if signal.legs else 0.0)
 
     async def _execute_live(self, signal: TradeSignal, now: datetime) -> ManagedOrder:
         base_order = ManagedOrder(order_id=f"live-{uuid.uuid4().hex[:10]}", signal_id=signal.signal_id,
