@@ -38,27 +38,39 @@ class DataIngestionAgent:
             raise DataIngestionError(f"No Fyers index symbol mapped for {underlying}")
         return _UNDERLYING_INDEX_SYMBOL[underlying]
 
-    async def fetch_option_chain_snapshot(self, underlying: Underlying, now: datetime, expiry_timestamp: Optional[str] = None, strike_count: int = 20) -> OptionChainSnapshot:
+    async def fetch_option_chain_snapshot(
+        self, underlying: Underlying, now: datetime, expiry_timestamp: Optional[str] = None, strike_count: int = 20
+    ) -> OptionChainSnapshot:
         symbol = self._index_symbol(underlying)
-        raw: FyersOptionChainResponse = await self._fyers.get_option_chain(symbol=symbol, strike_count=strike_count, timestamp=expiry_timestamp)
+        raw: FyersOptionChainResponse = await self._fyers.get_option_chain(
+            symbol=symbol, strike_count=strike_count, timestamp=expiry_timestamp
+        )
 
-        logger.warning("RAW optionsChain length for %s: %d. Full raw expiryData: %s", symbol, len(raw.optionsChain), raw.expiryData)
-        if raw.optionsChain:
-            logger.warning("First 3 raw legs for %s: %s", symbol, [
-                {"strike_price": leg.strike_price, "option_type": leg.option_type, "ltp": leg.ltp}
-                for leg in raw.optionsChain[:3]
-            ])
+        # IMPORTANT: Fyers' real /data/options-chain-v3 response nests
+        # everything (optionsChain, expiryData, indiavixData, callOi,
+        # putOi) inside a top-level "data" object -- confirmed directly
+        # against Fyers' own official API documentation sample response.
+        # Every field below is read via raw.data.<field>, never raw.<field>
+        # directly, for exactly this reason.
+        options_chain = raw.data.optionsChain
+        expiry_data = raw.data.expiryData
+        india_vix_data = raw.data.indiavixData
 
-        spot_leg = next((leg for leg in raw.optionsChain if leg.is_underlying_row()), None)
+        logger.info(
+            "Fetched optionsChain for %s: %d legs, %d expiryData entries.",
+            symbol, len(options_chain), len(expiry_data),
+        )
+
+        spot_leg = next((leg for leg in options_chain if leg.is_underlying_row()), None)
 
         spot_ltp: Optional[float] = None
         if spot_leg is not None:
             spot_ltp = spot_leg.ltp
         else:
             logger.warning(
-                "No underlying spot row found in optionsChain for %s. Total legs=%d. "
+                "No underlying spot row found in optionsChain for %s (chain had %d legs). "
                 "Falling back to /data/quotes for spot price.",
-                symbol, len(raw.optionsChain),
+                symbol, len(options_chain),
             )
             try:
                 quotes_data = await self._fyers.get_quotes([symbol])
@@ -75,11 +87,11 @@ class DataIngestionAgent:
                     f"and the /data/quotes fallback also failed to yield a usable price."
                 )
 
-        expiry = self._resolve_expiry(raw, expiry_timestamp, now)
+        expiry = self._resolve_expiry(expiry_data, expiry_timestamp, now)
 
         calls: list[OptionChainItem] = []
         puts: list[OptionChainItem] = []
-        for leg in raw.optionsChain:
+        for leg in options_chain:
             if leg.is_underlying_row():
                 continue
             is_call = leg.option_type == "CE"
@@ -88,32 +100,36 @@ class DataIngestionAgent:
                 continue
             bs_result = compute_full_greeks(leg.ltp, spot_ltp, leg.strike_price, now, expiry, self._risk_free_rate, is_call)
             greeks = to_computed_greeks(bs_result, self._risk_free_rate, t)
-            item = OptionChainItem(underlying=underlying, expiry=expiry, strike=leg.strike_price,
-                                     option_type=OptionType.CE if is_call else OptionType.PE,
-                                     symbol=leg.symbol, ltp=leg.ltp, bid=leg.bid, ask=leg.ask,
-                                     volume=leg.volume, open_interest=leg.oi, oi_change=leg.oich,
-                                     oi_change_pct=leg.oichp, greeks=greeks)
+            item = OptionChainItem(
+                underlying=underlying, expiry=expiry, strike=leg.strike_price,
+                option_type=OptionType.CE if is_call else OptionType.PE,
+                symbol=leg.symbol, ltp=leg.ltp, bid=leg.bid, ask=leg.ask,
+                volume=leg.volume, open_interest=leg.oi, oi_change=leg.oich,
+                oi_change_pct=leg.oichp, greeks=greeks,
+            )
             (calls if is_call else puts).append(item)
 
         if not calls or not puts:
             raise DataIngestionError(f"Fyers option chain for {symbol} returned no usable priced legs")
 
         prev_close = spot_ltp
-        spot_quote = UnderlyingQuote(underlying=underlying, ltp=spot_ltp, prev_close=prev_close, change=0.0,
-                                       change_pct=0.0, timestamp=now, india_vix=raw.indiavixData.ltp if raw.indiavixData else None)
+        spot_quote = UnderlyingQuote(
+            underlying=underlying, ltp=spot_ltp, prev_close=prev_close, change=0.0,
+            change_pct=0.0, timestamp=now, india_vix=india_vix_data.ltp if india_vix_data else None,
+        )
 
         return OptionChainSnapshot(underlying=underlying, expiry=expiry, spot=spot_quote, calls=calls, puts=puts, fetched_at=now)
 
     @staticmethod
-    def _resolve_expiry(raw: FyersOptionChainResponse, expiry_timestamp: Optional[str], now: datetime) -> datetime:
+    def _resolve_expiry(expiry_data: list[dict], expiry_timestamp: Optional[str], now: datetime) -> datetime:
         if expiry_timestamp:
             try:
                 return datetime.fromtimestamp(int(expiry_timestamp))
             except (ValueError, OverflowError):
                 pass
 
-        if raw.expiryData:
-            first = raw.expiryData[0]
+        if expiry_data:
+            first = expiry_data[0]
             for key in ("expiry", "date", "exp", "expiryDate", "expTs"):
                 ts = first.get(key) if isinstance(first, dict) else None
                 if ts is None:
@@ -132,7 +148,7 @@ class DataIngestionAgent:
         raise DataIngestionError(
             "Could not resolve a concrete expiry datetime from the Fyers option chain response "
             "-- refusing to guess, since an incorrect expiry corrupts every downstream Greeks calculation. "
-            "Check Render logs for the raw expiryData just logged above."
+            f"Raw expiryData was: {expiry_data}"
         )
 
     async def fetch_news_headlines(self, max_items_per_feed: int = 20) -> list:
