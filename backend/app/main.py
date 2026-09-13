@@ -28,12 +28,12 @@ logger = logging.getLogger("main")
 _UNDERLYING_BY_VALUE = {u.value: u for u in Underlying}
 
 
-def _resolve_underlyings(raw_values: list[str]) -> list[Underlying]:
+def _resolve_underlyings(raw_values):
     resolved = []
     for v in raw_values:
         if v not in _UNDERLYING_BY_VALUE:
             raise ValueError(f"Unknown underlying '{v}'. Valid values: {sorted(_UNDERLYING_BY_VALUE.keys())}")
-        resolved.appendLUE[v])
+        resolved.append(_UNDERLYING_BY_VALUE[v])
     return resolved
 
 
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     news_client = MoneycontrolRSSClient(settings.moneycontrol_rss_urls)
 
     try:
-        llm_router: LLMRouter | None = LLMRouter(settings)
+        llm_router = LLMRouter(settings)
     except LLMConfigurationError as exc:
         logger.warning("LLM router not configured (%s) -- Sentiment agent will use neutral fallback only.", exc)
         llm_router = None
@@ -174,7 +174,7 @@ async def set_capital(body: CapitalUpdate):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     for agents in app.state.agents_by_underlying.values():
-        agents.risk._config.manual_capital_override = body.capital  # noqa: SLF001
+        agents.risk._config.manual_capital_override = body.capital
     return {"capital": body.capital}
 
 
@@ -206,7 +206,7 @@ async def get_open_positions():
 
 @app.get("/api/fyers/session-status")
 async def fyers_session_status():
-    fyers_client: FyersClient = app.state.fyers_client
+    fyers_client = app.state.fyers_client
     return {"has_valid_session": fyers_client.has_valid_session(),
             "hint": ("Session valid for today." if fyers_client.has_valid_session()
                       else "No valid session -- complete today's login (see /api/fyers/login-url).")}
@@ -214,7 +214,7 @@ async def fyers_session_status():
 
 @app.get("/api/fyers/login-url")
 async def fyers_login_url():
-    fyers_client: FyersClient = app.state.fyers_client
+    fyers_client = app.state.fyers_client
     try:
         return {"login_url": fyers_client.build_login_url()}
     except ValueError as exc:
@@ -227,7 +227,7 @@ class FyersExchangeRequest(BaseModel):
 
 @app.post("/api/fyers/exchange")
 async def fyers_exchange(body: FyersExchangeRequest):
-    fyers_client: FyersClient = app.state.fyers_client
+    fyers_client = app.state.fyers_client
     try:
         auth_code = extract_auth_code(body.input)
     except AuthCodeParseError as exc:
@@ -260,7 +260,7 @@ async def ws_cycle_stream(websocket: WebSocket, underlying: str):
         return
 
     u = _UNDERLYING_BY_VALUE[underlying]
-    broadcaster: EventBroadcaster = websocket.app.state.broadcaster
+    broadcaster = websocket.app.state.broadcaster
 
     await websocket.accept()
     queue = await broadcaster.subscribe(u)
