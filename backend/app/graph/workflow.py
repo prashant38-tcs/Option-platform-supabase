@@ -48,4 +48,4 @@ def build_graph():
 
     async def _quant(state: TradingWorkflowState, config: RunnableConfig) -> TradingWorkflowState:
         agents: WorkflowAgents = config["configurable"]["agents"]
-        return await quant_analytics_node(state, agents.
+        return await quant_analytics
