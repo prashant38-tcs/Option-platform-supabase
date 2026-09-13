@@ -27,11 +27,13 @@ class PositionStore:
     def add(self, position: OpenPosition) -> None:
         self._positions[position.position_id] = position
 
-    def remove(self, position_id: str) -> Optional[eturn self._positions.pop(position_id, None)
+    def remove(self, position_id: str) -> Optional[OpenPosition]:
+        returnition_id, None)
 
     def all(self) -> listreturn list(self._positions.values())
 
-    def for_underlying(self, underlying: Underlying) -> listreturn [p for p in self._positions.values() if p.underlying == underlying]
+    def for_underlying(self, underlying: Underlying) -> list[OpenPosition]:
+        return [p .values() if p.underlying == underlying]
 
     def count(self) -> int:
         return len(self._positions)
