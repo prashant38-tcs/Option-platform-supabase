@@ -91,9 +91,6 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     app.state.broadcaster = broadcaster
     app.state.underlyings = underlyings
-    # All underlyings share ONE PositionStore instance -- grab it once
-    # here so /api/positions can read it without needing to know which
-    # underlying's WorkflowAgents to look through.
     app.state.position_store = next(iter(agents_by_underlying.values())).position_store
 
     logger.info("Starting scheduler for underlyings: %s | default trading mode: %s | market_hours_only: %s",
@@ -182,11 +179,6 @@ async def set_capital(body: CapitalUpdate):
 
 @app.get("/api/positions")
 async def get_open_positions():
-    """Lists every currently OPEN Paper/Live position. Positions now
-    close automatically at expiry (see risk_manager_agent.py's
-    close_expired_positions_for_underlying, invoked at the start of every
-    cycle) -- until a position's expiry date arrives, it stays open here
-    and correctly counts against the max-concurrent-positions cap."""
     store = app.state.position_store
     positions = []
     for pos in store.all():
