@@ -38,24 +38,24 @@ class WorkflowAgents:
 def build_graph():
     graph = StateGraph(TradingWorkflowState)
 
-    async def _data_ingestion(state: TradingWorkflowState, config: RunnableConfig) -> TradingWorkflowState:
-        agents: WorkflowAgents = config["configurable"]["agents"]
+    async def _data_ingestion(state, config):
+        agents = config["configurable"]["agents"]
         return await data_ingestion_node(state, agents.data_ingestion)
 
-    async def _sentiment(state: TradingWorkflowState, config: RunnableConfig) -> TradingWorkflowState:
-        agents: WorkflowAgents = config["configurable"]["agents"]
+    async def _sentiment(state, config):
+        agents = config["configurable"]["agents"]
         return await sentiment_node(state, agents.sentiment)
 
-    async def _quant(state: TradingWorkflowState, config: RunnableConfig) -> TradingWorkflowState:
-        agents: WorkflowAgents = config["configurable"]["agents"]
+    async def _quant(state, config):
+        agents = config["configurable"]["agents"]
         return await quant_analytics_node(state, agents.quant, agents.iv_history)
 
-    async def _risk(state: TradingWorkflowState, config: RunnableConfig) -> TradingWorkflowState:
-        agents: WorkflowAgents = config["configurable"]["agents"]
+    async def _risk(state, config):
+        agents = config["configurable"]["agents"]
         return await risk_manager_node(state, agents.risk, agents.position_store)
 
-    async def _execution(state: TradingWorkflowState, config: RunnableConfig) -> TradingWorkflowState:
-        agents: WorkflowAgents = config["configurable"]["agents"]
+    async def _execution(state, config):
+        agents = config["configurable"]["agents"]
         return await execution_node(state, agents.execution)
 
     graph.add_node("data_ingestion", _data_ingestion)
@@ -66,14 +66,14 @@ def build_graph():
 
     graph.add_edge(START, "data_ingestion")
 
-    def _route_after_data_ingestion(state: TradingWorkflowState) -> str:
+    def _route_after_data_ingestion(state):
         return "end" if state.cycle_status == "halted" else "sentiment"
 
     graph.add_conditional_edges("data_ingestion", _route_after_data_ingestion, {"sentiment": "sentiment", "end": END})
     graph.add_edge("sentiment", "quant_analytics")
     graph.add_edge("quant_analytics", "risk_manager")
 
-    def _route_after_risk(state: TradingWorkflowState) -> str:
+    def _route_after_risk(state):
         return "end" if state.cycle_status == "halted" else "execution"
 
     graph.add_conditional_edges("risk_manager", _route_after_risk, {"execution": "execution", "end": END})
@@ -84,7 +84,7 @@ def build_graph():
 
 def build_workflow_agents(fyers_client, llm_router, news_client, quant_config, risk_config, risk_free_rate,
                             underlying, performance_tracker=None, live_compliance_checklist=None,
-                            algo_id_tag=None, iv_history=None, position_store=None) -> WorkflowAgents:
+                            algo_id_tag=None, iv_history=None, position_store=None):
     data_ingestion = DataIngestionAgent(fyers_client, news_client, risk_free_rate)
     sentiment = SentimentAgent(llm_router)
     quant = QuantAnalyticsAgent(quant_config, llm_router)
@@ -100,19 +100,19 @@ def build_workflow_agents(fyers_client, llm_router, news_client, quant_config, r
                             position_store=store)
 
 
-def _wrap_quant_with_performance_feedback(quant: QuantAnalyticsAgent, tracker: PerformanceTracker, config: QuantAgentConfig) -> None:
+def _wrap_quant_with_performance_feedback(quant, tracker, config):
     original = quant.generate_candidate_signals
 
     def wrapped(*args, **kwargs):
         signals = original(*args, **kwargs)
         return tracker.rank_candidates(signals, config)
 
-    quant.generate_candidate_signals = wrapped  # type: ignore[method-assign]
+    quant.generate_candidate_signals = wrapped
 
 
-def build_shared_agents_for_underlyings(underlyings: list, fyers_client, llm_router, news_client, quant_config,
+def build_shared_agents_for_underlyings(underlyings, fyers_client, llm_router, news_client, quant_config,
                                           risk_config, risk_free_rate, performance_tracker=None,
-                                          live_compliance_checklist=None, algo_id_tag=None) -> dict:
+                                          live_compliance_checklist=None, algo_id_tag=None):
     risk = RiskManagerAgent(risk_config, fyers_client)
     position_store = PositionStore()
     execution = ExecutionAgent(fyers_client, risk, live_compliance_checklist, algo_id_tag, position_store=position_store)
@@ -131,11 +131,12 @@ def build_shared_agents_for_underlyings(underlyings: list, fyers_client, llm_rou
     }
 
 
-def _diff_new_log_entries(prev_count: int, state: TradingWorkflowState) -> listnew_entries = state.reasoning_log[prev_count:]
+def _diff_new_log_entries(prev_count, state):
+    new_entries = state.reasoning_log[prev_count:]
     return [e.model_dump(mode="json") for e in new_entries]
 
 
-async def run_cycle(compiled_graph, agents: WorkflowAgents, initial_state: TradingWorkflowState, broadcaster=None) -> TradingWorkflowState:
+async def run_cycle(compiled_graph, agents, initial_state, broadcaster=None):
     config = {"configurable": {"agents": agents}}
 
     if broadcaster is None:
@@ -144,7 +145,7 @@ async def run_cycle(compiled_graph, agents: WorkflowAgents, initial_state: Tradi
 
     underlying = initial_state.underlying
     last_log_count = 0
-    final_state_dict: Optional[dict] = None
+    final_state_dict = None
 
     await broadcaster.publish(underlying, {"type": "cycle_started", "cycle_id": initial_state.cycle_id,
                                               "trading_mode": initial_state.trading_mode.value})
@@ -211,4 +212,4 @@ async def run_cycle(compiled_graph, agents: WorkflowAgents, initial_state: Tradi
     await broadcaster.publish(underlying, {"type": "cycle_finished", "cycle_id": initial_state.cycle_id,
                                               "cycle_status": final_state_dict.get("cycle_status") if final_state_dict else "errored"})
 
-    return TradingWorkflowState(**final_state_dict) if final_state_dict else initial_state
+    return TradingWorkflowState(**final_state_dict) if final_state_dict else initial
