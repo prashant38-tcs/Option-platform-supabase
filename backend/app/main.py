@@ -28,11 +28,12 @@ logger = logging.getLogger("main")
 _UNDERLYING_BY_VALUE = {u.value: u for u in Underlying}
 
 
-def _resolve_underlyings(raw_values: list[str]) -> listresolved = []
+def _resolve_underlyings(raw_values: list[str]) -> list[Underlying]:
+    resolved = []
     for v in raw_values:
         if v not in _UNDERLYING_BY_VALUE:
             raise ValueError(f"Unknown underlying '{v}'. Valid values: {sorted(_UNDERLYING_BY_VALUE.keys())}")
-        resolved.append(_UNDERLYING_BY_VALUE[v])
+        resolved.appendLUE[v])
     return resolved
 
 
